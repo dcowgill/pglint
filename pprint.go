@@ -6,21 +6,19 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
 
-// Formats the headers and rows as a table and writes the result to w. The
-// result is also compatible with GitHub's markdown syntax for tables.
-//
-// The rows may contain values of any data type. If a value implements either
-// fmt.Stringer or fmt.GoStringer, the interface is used to convert it to a
-// string (fmt.Stringer is preferred). ints and float64s are formatted using the
-// fmt "%d" and "%g" verbs, respectively; anything else uses the "%v" verb.
-//
-// rows need not be of equal length; short rows are padded with empty cells. If
-// a row is longer than headers, however, its extra values are not printed.
-//
-// prefix is appended to the beginning of each line.
-//
+// Formats the headers and rows as a table using Github-compatible markdown,
+// printing to the supplied writer. The rows may contain values of any data
+// type. If a value implements either fmt.Stringer or fmt.GoStringer, it is used
+// to convert it to a string; fmt.Stringer is preferred. ints and float64s are
+// formatted using the "%d" and "%f" fmt verbs; anything else uses "%v". The
+// rows need not be of equal length: short rows are padded with empty cells;
+// extra cells (that is, in rows longer than "headers") are ignored. Finally,
+// "prefix" is appended to the beginning of each line in the output.
 func pprintTable(w io.Writer, headers []string, rows [][]interface{}, prefix string) {
 	// Convert the rows to [][]string.
 	strRows := make([][]string, len(rows))
@@ -36,9 +34,9 @@ func pprintTable(w io.Writer, headers []string, rows [][]interface{}, prefix str
 			case string:
 				s = v
 			case int:
-				s = strconv.Itoa(v)
+				s = fmtInt(v)
 			case float64:
-				s = fmt.Sprintf("%g", v)
+				s = fmtFloat(v)
 			default:
 				s = fmt.Sprintf("%v", cell)
 			}
@@ -47,6 +45,22 @@ func pprintTable(w io.Writer, headers []string, rows [][]interface{}, prefix str
 		strRows[i] = strs
 	}
 
+	// Columns that exclusively contain values of type int or float64 should be
+	// right-aligned; everything else gets left-aligned.
+	alignLeft := make([]bool, len(headers))
+nextCol:
+	for i := range headers {
+		for _, row := range rows {
+			switch row[i].(type) {
+			case int, float64:
+			default:
+				alignLeft[i] = true
+				continue nextCol
+			}
+		}
+	}
+
+	// FIXME: min(3, ...)
 	// Determine the widest string in each column.
 	colWidths := make([]int, len(headers))
 	for i, s := range headers {
@@ -60,36 +74,49 @@ func pprintTable(w io.Writer, headers []string, rows [][]interface{}, prefix str
 		}
 	}
 
-	// Create the string that separates the headers from the rows.
-	var separator string
-	for _, w := range colWidths {
-		separator += "|" + strings.Repeat("-", w+2)
-	}
-	separator += "|"
-
-	// Helper func to print contents of a cell in column n.
-	formatCell := func(n int, value string) string {
-		align := ""
-		if _, err := strconv.ParseFloat(value, 64); err != nil {
-			align = "-" // left align non-numeric cells
+	// Create the string that separates the headers from the rows. It also
+	// specifies which columns should be left- and right-aligned.
+	var sepb strings.Builder
+	for i, w := range colWidths {
+		sepb.WriteString("| ")
+		if alignLeft[i] {
+			sepb.WriteByte(':')
 		}
-		format := fmt.Sprintf("| %%%s%ds ", align, colWidths[n])
-		return fmt.Sprintf(format, value)
+		for j := 0; j < w-1; j++ {
+			sepb.WriteByte('-')
+		}
+		if !alignLeft[i] {
+			sepb.WriteByte(':')
+		}
+		sepb.WriteByte(' ')
+	}
+	sepb.WriteByte('|')
+	separator := sepb.String()
+
+	// Create the format strings for each column. This could be combined with
+	// the loop that builds the separator string, but it's clearer this way.
+	formats := make([]string, len(headers))
+	for i, width := range colWidths {
+		align := ""
+		if alignLeft[i] {
+			align = "-"
+		}
+		formats[i] = fmt.Sprintf("| %%%s%ds ", align, width)
 	}
 
-	// Helper function to emit a single row.
+	// Helper func: print a row. Works for the headers, too.
 	printRow := func(row []string) {
 		fmt.Fprint(w, prefix)
 		for i := 0; i < len(row) && i < len(headers); i++ {
-			fmt.Fprint(w, formatCell(i, row[i]))
+			fmt.Fprint(w, fmt.Sprintf(formats[i], row[i]))
 		}
 		for i := len(row); i < len(headers); i++ {
-			fmt.Fprint(w, formatCell(i, ""))
+			fmt.Fprint(w, fmt.Sprintf(formats[i], ""))
 		}
-		fmt.Fprintf(w, "|\n")
+		fmt.Fprint(w, "|\n")
 	}
 
-	// Print to the writer.
+	// Print the table the writer.
 	printRow(headers)
 	fmt.Fprintln(w, prefix+separator)
 	for _, row := range strRows {
@@ -102,4 +129,27 @@ func pprintTableString(headers []string, rows [][]interface{}, prefix string) st
 	buf := new(bytes.Buffer)
 	pprintTable(buf, headers, rows, prefix)
 	return buf.String()
+}
+
+// Formats an integer in a locale-specific way, if possible.
+func fmtInt(n int) string {
+	if msgPrinter != nil {
+		return msgPrinter.Sprintf("%d", n)
+	}
+	return strconv.Itoa(n)
+}
+
+// Formats a float in a locale-specific way, if possible.
+func fmtFloat(n float64) string {
+	if msgPrinter != nil {
+		return msgPrinter.Sprintf("%f", n)
+	}
+	return fmt.Sprintf("%f", n)
+}
+
+// The global locale-specific printer.
+var msgPrinter *message.Printer
+
+func setLanguage(lang language.Tag) {
+	msgPrinter = message.NewPrinter(lang)
 }

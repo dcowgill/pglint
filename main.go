@@ -1,4 +1,4 @@
-// pgvet generates a report of problems found in a Postgres database. Its
+// pglint generates a report of problems found in a Postgres database. Its
 // heuristics depend on live data and statistics, so its output should therefore
 // only be trusted when run on a production instance.
 package main
@@ -7,8 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/jackc/pgx"
+	"golang.org/x/text/language"
 )
 
 // TODO: identify smallint/integer sequences where overflow is imminent.
@@ -24,6 +26,16 @@ func main() {
 		minIndexRows = flag.Int("minindexrows", 10, "min. rows for unused index to be included in report")
 	)
 	flag.Parse()
+
+	// Determine the user's locale.
+	{
+		locale := getFirstEnv("LC_ALL", "LC_NUMERIC", "LANG")
+		tag, err := language.Parse(parseLocale(locale))
+		if err != nil {
+			tag = language.English
+		}
+		setLanguage(tag)
+	}
 
 	// Parse the connection string.
 	connConf, err := pgx.ParseConnectionString(*connInfo)
@@ -91,9 +103,27 @@ func main() {
 	}
 }
 
-// fatalf prints the message to stderr, then aborts.
+// Prints the message to stderr, then aborts.
 func fatalf(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, format, args...)
 	fmt.Fprintf(os.Stderr, "\n")
 	os.Exit(1)
+}
+
+// Given a locale string of the format language[_territory][.codeset][@modifier],
+// returns the language and territory part.
+func parseLocale(locale string) string {
+	parts := strings.SplitN(locale, ".", 2)
+	return strings.Replace(parts[0], "-", "_", 1)
+}
+
+// Returns the value of the first non-empty named environment variable. If no
+// names are given or if every var is empty, returns an empty string.
+func getFirstEnv(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }

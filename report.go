@@ -173,7 +173,7 @@ func indexesTable(indexes []*Index) string {
 	return pprintTableString(headings, rows, "")
 }
 
-const markdownReport = `# pgvet report for database "{{ .ConnConfig.Database }}"
+const markdownReport = `# pglint report for database "{{ .ConnConfig.Database }}"
 
 Connection info:
 
@@ -213,13 +213,15 @@ Criteria for inclusion in this report:
 * Is either non-unique or is a primary key.
 
 **Important:** this section of the report relies on usage statistics, and will
-only contain meaningful results if pgvet was run against a production database.
+only contain meaningful results if pglint was run against a production database.
 
-Note: unique indexes are not included because they enforce a constraint and
-cannot be dropped simply because they aren't used in query plans (when a unique
-index prevents its constraint from being violated, it is not recorded as a
-"scan"). Primary key indexes, however, _are_ included: a primary key that is
-never scanned is often a sign of a design flaw.
+Note: this report doesn't include unique indexes because its goal is to identify
+useless indexes, and a unique index can't be considered useless because it
+enforces a constraint. In other words, a unique index can't be dropped merely
+because the database never uses it to execute a query. (Note: when a unique
+index prevents its constraint from being violated, Postgres does not record that
+event as a "scan".) Primary key indexes, however, _are_ included, because a
+primary key that is never scanned is usually a sign of a data model design flaw.
 
 {{ .FormatUnusedIndexes }}
 
